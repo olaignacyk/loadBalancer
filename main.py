@@ -6,11 +6,23 @@ if __name__ == "__main__":
     # Inicjalizacja Load Balancera
     load_balancer = LoadBalancer('Connection/db.json', strategy_type="least_connections")
 
-    # Wczytanie konfiguracji baz danych
-    with open('Connection/db.json', 'r') as file:
-        databases = json.load(file)
+    # Tworzenie tabeli w każdej bazie danych
+    schema = """
+    CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL
+    );
+    """
+    load_balancer.create_table(schema)
+
+    # Synchronizacja danych z pliku master_data.json
+    master_file = "data/master_data.json"
+    load_balancer.synchronize_tables(master_file)
 
     # Inicjalizacja Health Checkera
+    with open('Connection/db.json', 'r') as file:
+        databases = json.load(file)
     health_checker = HealthChecker(databases, check_interval=15)
 
     # Rejestracja Load Balancera jako obserwatora
@@ -20,18 +32,15 @@ if __name__ == "__main__":
     health_checker.check_health()
 
     try:
-        # Symulacja zapytań do Load Balancera
-        active_connections = []
-        for _ in range(5):  # Symulacja 5 żądań
-            conn, db_name = load_balancer.get_connection()
-            if conn:
-                active_connections.append((conn, db_name))
-                print(f"Performing operation on database {db_name}")
+        # Demonstracja operacji na danych
+        print("\n--- Operacje na danych ---")
 
-        # Zwolnienie połączeń
-        for conn, db_name in active_connections:
-            conn.close()
-            load_balancer.release_connection(db_name)
+        # 1. SELECT
+        print("Aktualna zawartość tabeli `users`:")
+        select_query = "SELECT * FROM users;"
+        results = load_balancer.execute_select(select_query)
+        for row in results:
+            print(row)
 
     except KeyboardInterrupt:
         print("Shutting down gracefully...")

@@ -67,14 +67,143 @@ class LoadBalancer(Observer):
             self.logger.error(f"Failed to connect to {db_info['Name']}: {e}")
             return None, None
 
-    def release_connection(self, db_name):
+    def create_table(self, schema):
         """
-        Release a connection, applicable for least_connections strategy.
-        :param db_name: The name of the database to release the connection.
+        Create a table in all databases.
+        :param schema: The SQL schema to execute.
         """
-        if isinstance(self.strategy, LeastConnectionsStrategy):
-            self.strategy.release_connection(db_name)
-            self.logger.debug(f"Released connection for database: {db_name}")
+        for db in self.databases:
+            conn_str = self._parse_connection_string(db["ConnectionString"])
+            try:
+                conn = psycopg2.connect(**conn_str)
+                with conn.cursor() as cursor:
+                    cursor.execute(schema)
+                    conn.commit()
+                    self.logger.info(f"Table created in database {db['Name']}")
+            except Exception as e:
+                self.logger.error(f"Error creating table in database {db['Name']}: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+    def execute_select(self, query, params=None):
+        """
+        Execute a SELECT query on a database chosen by the strategy.
+        :param query: The SELECT query to execute.
+        :param params: Optional query parameters.
+        :return: Query results.
+        """
+        conn, db_name = self.get_connection()
+        if conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, params)
+                    result = cursor.fetchall()
+                    self.logger.info(f"SELECT executed on database {db_name}: {result}")
+                    return result
+            except Exception as e:
+                self.logger.error(f"Error executing SELECT on {db_name}: {e}")
+            finally:
+                conn.close()
+
+    def synchronize_tables(self, master_file):
+        """
+        Synchronize all databases with data from the master file.
+        :param master_file: Path to the master JSON file containing the table data.
+        """
+        with open(master_file, 'r') as file:
+            master_data = json.load(file)
+
+        for db in self.databases:
+            conn_str = self._parse_connection_string(db["ConnectionString"])
+            try:
+                conn = psycopg2.connect(**conn_str)
+                with conn.cursor() as cursor:
+                    # Clear existing data
+                    cursor.execute("DELETE FROM users;")
+
+                    # Insert master data
+                    for record in master_data:
+                        cursor.execute(
+                            "INSERT INTO users (id, name, email) VALUES (%s, %s, %s) "
+                            "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email;",
+                            (record["id"], record["name"], record["email"])
+                        )
+                    conn.commit()
+                    self.logger.info(f"Database {db['Name']} synchronized with master data.")
+            except Exception as e:
+                self.logger.error(f"Error synchronizing database {db['Name']}: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+    def add_user(self, master_file, name, email):
+        """
+        Add a new user to the master data and synchronize with all databases.
+        :param master_file: Path to the master JSON file.
+        :param name: Name of the user.
+        :param email: Email of the user.
+        """
+        with open(master_file, 'r+') as file:
+            data = json.load(file)
+            new_id = max([user["id"] for user in data]) + 1 if data else 1
+            new_user = {"id": new_id, "name": name, "email": email}
+            data.append(new_user)
+
+            # Write back to the file
+            file.seek(0)
+            json.dump(data, file, indent=4)
+            file.truncate()
+
+        self.logger.info(f"Added new user to master data: {new_user}")
+        self.synchronize_tables(master_file)
+
+    def update_user(self, master_file, user_id, name=None, email=None):
+        """
+        Update a user's details in the master data and synchronize with all databases.
+        :param master_file: Path to the master JSON file.
+        :param user_id: ID of the user to update.
+        :param name: New name for the user.
+        :param email: New email for the user.
+        """
+        with open(master_file, 'r+') as file:
+            data = json.load(file)
+            for user in data:
+                if user["id"] == user_id:
+                    if name:
+                        user["name"] = name
+                    if email:
+                        user["email"] = email
+                    break
+            else:
+                self.logger.error(f"User with ID {user_id} not found.")
+                return
+
+            # Write back to the file
+            file.seek(0)
+            json.dump(data, file, indent=4)
+            file.truncate()
+
+        self.logger.info(f"Updated user in master data: {user_id}")
+        self.synchronize_tables(master_file)
+
+    def delete_user(self, master_file, user_id):
+        """
+        Delete a user from the master data and synchronize with all databases.
+        :param master_file: Path to the master JSON file.
+        :param user_id: ID of the user to delete.
+        """
+        with open(master_file, 'r+') as file:
+            data = json.load(file)
+            data = [user for user in data if user["id"] != user_id]
+
+            # Write back to the file
+            file.seek(0)
+            json.dump(data, file, indent=4)
+            file.truncate()
+
+        self.logger.info(f"Deleted user from master data: {user_id}")
+        self.synchronize_tables(master_file)
 
     def _parse_connection_string(self, conn_string):
         """
@@ -93,18 +222,6 @@ class LoadBalancer(Observer):
                     raise
         return params
 
-    def set_strategy(self, strategy_type):
-        """
-        Change the load balancing strategy.
-        :param strategy_type: The new strategy type.
-        """
-        try:
-            self.strategy = LoadBalancingStrategyFactory.create_strategy(strategy_type)
-            self.logger.info(f"Strategy changed to: {strategy_type}")
-        except ValueError as e:
-            self.logger.error(f"Failed to change strategy: {e}")
-            raise
-
     def update(self, database_name, status):
         """
         Observer method to update the status of a database.
@@ -115,7 +232,6 @@ class LoadBalancer(Observer):
             self.logger.warning(f"Database {database_name} marked as unhealthy. Excluding from load balancing.")
             self.databases = [db for db in self.databases if db["Name"] != database_name]
         elif status == "healthy":
-            # Re-add healthy database if it was removed
             if database_name not in [db["Name"] for db in self.databases]:
                 self.logger.info(f"Database {database_name} marked as healthy. Including in load balancing.")
                 with open(self.config_file, 'r') as file:
