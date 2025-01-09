@@ -1,0 +1,18 @@
+[
+  {
+    "Name": "db1",
+    "ConnectionString": "Host=localhost;Port=5432;Database=database1;User=user1;Password=password1;"
+  },
+  {
+    "Name": "db2",
+    "ConnectionString": "Host=localhost;Port=5433;Database=database2;User=user2;Password=password2;"
+  },
+  {
+    "Name": "db3",
+    "ConnectionString": "Host=localhost;Port=5434;Database=database3;User=user3;Password=password3;"
+  },
+  {
+    "Name": "db4",
+    "ConnectionString": "Host=localhost;Port=5435;Database=database4;User=user4;Password=password4;"
+  }
+]
