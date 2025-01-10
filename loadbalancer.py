@@ -16,35 +16,36 @@ class LoadBalancer(Observer):
         self.logger = SingletonLogger().get_logger()
         self.logger.info(f"Initializing LoadBalancer with strategy: {strategy_type}")
         self.config_file = config_file
+        self.databases = self.load_config()
+        self.strategy = self.set_strategy(strategy_type)
 
-        try:
-            self.databases = self._load_config(config_file)
-            if not self.databases:
-                raise RuntimeError("No databases available in configuration.")
-        except Exception as e:
-            self.logger.error(f"Failed to load database configuration: {e}")
-            raise
-
-        try:
-            self.strategy = LoadBalancingStrategyFactory.create_strategy(strategy_type)
-            self.logger.info(f"Strategy '{strategy_type}' successfully initialized.")
-        except ValueError as e:
-            self.logger.error(f"Failed to initialize strategy: {e}")
-            raise
-
-    def _load_config(self, config_file):
+    def load_config(self):
         """
         Load the database configuration from a JSON file.
-        :param config_file: Path to the JSON configuration file.
         :return: List of database configurations.
         """
-        self.logger.info(f"Loading database configuration from {config_file}.")
-        with open(config_file, 'r') as file:
-            databases = json.load(file)
+        self.logger.info(f"Loading database configuration from {self.config_file}.")
+        try:
+            with open(self.config_file, 'r') as file:
+                databases = json.load(file)
             if not databases:
-                self.logger.warning("Configuration file contains no database entries.")
-            self.logger.info("Database configuration loaded successfully.")
+                raise ValueError("Configuration file is empty or invalid.")
             return databases
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            self.logger.error(f"Error loading configuration: {e}")
+            raise
+
+    def set_strategy(self, strategy_type):
+        """
+        Set the load balancing strategy based on the strategy type.
+        """
+        try:
+            strategy = LoadBalancingStrategyFactory.create_strategy(strategy_type)
+            self.logger.info(f"Strategy '{strategy_type}' successfully initialized.")
+            return strategy
+        except KeyError as e:
+            self.logger.error(f"Unknown strategy type: {strategy_type} - {e}")
+            raise
 
     def get_connection(self):
         """
