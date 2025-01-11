@@ -68,9 +68,6 @@ class LoadBalancer(Observer):
                     conn.close()
 
     def reset_sequences(self):
-        """
-        Reset sequences for the 'id' column in all databases to match the current max(id).
-        """
         query = "SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE(MAX(id), 0), true) FROM users;"
         for db in self.databases:
             conn_str = self._parse_connection_string(db["ConnectionString"])
@@ -79,7 +76,6 @@ class LoadBalancer(Observer):
                 with conn.cursor() as cursor:
                     cursor.execute(query)
                     conn.commit()
-                    # self.logger.info(f"Sequence reset in database {db['Name']}")
             except Exception as e:
                 self.logger.error(f"Error resetting sequence in database {db['Name']}: {e}")
             finally:
@@ -87,14 +83,8 @@ class LoadBalancer(Observer):
                     conn.close()
 
     def execute_select(self, query, params=None):
-        """
-        Execute a SELECT query on a database chosen by the strategy.
-        :param query: The SELECT query to execute.
-        :param params: Optional query parameters.
-        :return: Query results.
-        """
-        if "ORDER BY" not in query.upper():
-            query = query.rstrip(";") + " ORDER BY id;"
+        # if "ORDER BY" not in query.upper():
+        #     query = query.rstrip(";") + " ORDER BY id;"
 
         conn, db_name = self.get_connection()
         if conn:
@@ -102,17 +92,13 @@ class LoadBalancer(Observer):
                 with conn.cursor() as cursor:
                     cursor.execute(query, params)
                     result = cursor.fetchall()
-                    # self.logger.info(f"SELECT executed on database {db_name}: {result}")
                     return result
             except Exception as e:
                 self.logger.error(f"Error executing SELECT on {db_name}: {e}")
             finally:
                 conn.close()
 
-    def execute_query_on_all_databases(self, query, params=None):
-        """
-        Execute a query on all available databases.
-        """
+    def execute_non_select_query(self, query, params=None):
         for db in self.databases:
             conn_str = self._parse_connection_string(db["ConnectionString"])
             try:
@@ -120,109 +106,14 @@ class LoadBalancer(Observer):
                 with conn.cursor() as cursor:
                     cursor.execute(query, params)
                     conn.commit()
-                    self.logger.info(f"Query executed on database {db['Name']}")
+                    self.logger.info(f"Query executed on database {db['Name']}: {query}")
             except Exception as e:
                 self.logger.error(f"Error executing query on database {db['Name']}: {e}")
             finally:
                 if conn:
                     conn.close()
 
-    def add_user(self, name, email):
-        """
-        Add a new user to all databases.
-        """
-        query = "INSERT INTO users (name, email) VALUES (%s, %s);"
-        self.execute_query_on_all_databases(query, (name, email))
-        self.logger.info(f"User added to all databases: Name={name}, Email={email}")
-
-    def update_user(self, user_id, name=None, email=None):
-        """
-        Update user details in all databases, only if the user ID exists.
-        """
-        # Sprawdzenie, czy użytkownik istnieje w tabeli w jednej z baz danych
-        query_check = "SELECT 1 FROM users WHERE id = %s LIMIT 1;"
-        user_exists = False
-
-        for db in self.databases:
-            conn_str = self._parse_connection_string(db["ConnectionString"])
-            try:
-                conn = psycopg2.connect(**conn_str)
-                with conn.cursor() as cursor:
-                    cursor.execute(query_check, (user_id,))
-                    if cursor.fetchone():
-                        user_exists = True
-                        print(f"Użytkownik o ID {user_id} został zaktualizowany.")
-                        break  # Użytkownik znaleziony, przerwij sprawdzanie
-            except Exception as e:
-                self.logger.error(f"Error checking user existence in database {db['Name']}: {e}")
-            finally:
-                if conn:
-                    conn.close()
-
-        if not user_exists:
-            # self.logger.warning(f"User with ID {user_id} does not exist in any database.")
-            print(f"Użytkownik o ID {user_id} nie istnieje.")
-            return
-
-        # Budowanie zapytania UPDATE tylko jeśli użytkownik istnieje
-        query = "UPDATE users SET "
-        params = []
-        if name:
-            query += "name = %s, "
-            params.append(name)
-        if email:
-            query += "email = %s, "
-            params.append(email)
-        query = query.rstrip(", ") + " WHERE id = %s;"
-        params.append(user_id)
-
-        self.execute_query_on_all_databases(query, params)
-        self.logger.info(f"User updated in all databases: ID={user_id}, Name={name}, Email={email}")
-
-
-
-
-    def delete_user(self, user_id):
-        """
-        Delete a user from all databases if the user ID exists, and reset sequences.
-        """
-        # Sprawdzenie, czy użytkownik istnieje w tabeli w jednej z baz danych
-        query_check = "SELECT 1 FROM users WHERE id = %s LIMIT 1;"
-        user_exists = False
-
-        for db in self.databases:
-            conn_str = self._parse_connection_string(db["ConnectionString"])
-            try:
-                conn = psycopg2.connect(**conn_str)
-                with conn.cursor() as cursor:
-                    cursor.execute(query_check, (user_id,))
-                    if cursor.fetchone():
-                        user_exists = True
-                        break  # Przerwij sprawdzanie, jeśli użytkownik został znaleziony
-            except Exception as e:
-                self.logger.error(f"Error checking user existence in database {db['Name']}: {e}")
-            finally:
-                if conn:
-                    conn.close()
-
-        if not user_exists:
-            # self.logger.warning(f"User with ID {user_id} does not exist.")
-            print(f"Użytkownik o ID {user_id} nie istnieje.")
-            return
-
-        # Usuń użytkownika z wszystkich baz danych
-        query_delete = "DELETE FROM users WHERE id = %s;"
-        self.execute_query_on_all_databases(query_delete, (user_id,))
-        self.logger.info(f"User deleted from all databases: ID={user_id}")
-        print(f"Użytkownik o ID {user_id} został usunięty.")
-
-        # Resetuj sekwencje po usunięciu użytkownika
-        self.reset_sequences()
-
     def add_database(self, database_config):
-        """
-        Add a new database to the configuration and synchronize its data.
-        """
         self.databases.append(database_config)
         self.logger.info(f"New database added: {database_config['Name']}")
 
@@ -230,7 +121,6 @@ class LoadBalancer(Observer):
         try:
             conn = psycopg2.connect(**conn_str)
             with conn.cursor() as cursor:
-                # Create the users table if not exists
                 cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
