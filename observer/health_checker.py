@@ -15,6 +15,7 @@ class HealthChecker:
         self.logger = SingletonLogger().get_logger()
         self.check_interval = check_interval
         self.timer = None
+        self.database_status = {db["Name"]: "unknown" for db in databases}
 
     def add_observer(self, observer):
         """
@@ -41,11 +42,30 @@ class HealthChecker:
         for observer in self.observers:
             observer.update(database_name, status)
 
+    def initial_health_check(self):
+        """
+        Perform an initial health check for all databases.
+        """
+        self.logger.info("Performing initial health check...")
+        for db in self.databases:
+            db_name = db["Name"]
+            conn_str = self._parse_connection_string(db["ConnectionString"])
+            try:
+                conn = psycopg2.connect(**conn_str)
+                conn.close()
+                self.logger.info(f"Database {db_name} is healthy.")
+                self.database_status[db_name] = "healthy"
+                self.notify_observers(db_name, "healthy")
+            except psycopg2.OperationalError:
+                self.logger.error(f"Database {db_name} is unhealthy.")
+                self.database_status[db_name] = "unhealthy"
+                self.notify_observers(db_name, "unhealthy")
+
     def check_health(self):
         """
-        Check the health of all databases and notify observers.
+        Monitor databases and notify observers only when a status change occurs.
         """
-        self.logger.info("Starting health check...")
+        # self.logger.info("Monitoring database health...")
         for db in self.databases:
             db_name = db["Name"]
             conn_str = self._parse_connection_string(db["ConnectionString"])
@@ -53,11 +73,15 @@ class HealthChecker:
             try:
                 conn = psycopg2.connect(**conn_str)
                 conn.close()
-                self.logger.info(f"Database {db_name} is healthy.")
-                self.notify_observers(db_name, "healthy")
+                if self.database_status[db_name] != "healthy":
+                    self.logger.info(f"Database {db_name} status changed to healthy.")
+                    self.database_status[db_name] = "healthy"
+                    self.notify_observers(db_name, "healthy")
             except psycopg2.OperationalError:
-                self.logger.error(f"Database {db_name} is unhealthy.")
-                self.notify_observers(db_name, "unhealthy")
+                if self.database_status[db_name] != "unhealthy":
+                    self.logger.error(f"Database {db_name} status changed to unhealthy.")
+                    self.database_status[db_name] = "unhealthy"
+                    self.notify_observers(db_name, "unhealthy")
 
         # Schedule the next health check
         self.timer = Timer(self.check_interval, self.check_health)
