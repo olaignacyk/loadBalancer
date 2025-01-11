@@ -93,6 +93,9 @@ class LoadBalancer(Observer):
         :param params: Optional query parameters.
         :return: Query results.
         """
+        if "ORDER BY" not in query.upper():
+            query = query.rstrip(";") + " ORDER BY id;"
+
         conn, db_name = self.get_connection()
         if conn:
             try:
@@ -175,6 +178,9 @@ class LoadBalancer(Observer):
 
         self.execute_query_on_all_databases(query, params)
         self.logger.info(f"User updated in all databases: ID={user_id}, Name={name}, Email={email}")
+
+
+
 
     def delete_user(self, user_id):
         """
