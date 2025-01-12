@@ -57,6 +57,7 @@ class LoadBalancer(Observer):
     def create_table(self, schema):
         for db in self.databases:
             conn_str = self._parse_connection_string(db["ConnectionString"])
+            conn = None
             try:
                 conn = psycopg2.connect(**conn_str)
                 with conn.cursor() as cursor:
@@ -73,6 +74,7 @@ class LoadBalancer(Observer):
         query = "SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE(MAX(id), 0), true) FROM users;"
         for db in self.databases:
             conn_str = self._parse_connection_string(db["ConnectionString"])
+            conn = None
             try:
                 conn = psycopg2.connect(**conn_str)
                 with conn.cursor() as cursor:
@@ -103,6 +105,7 @@ class LoadBalancer(Observer):
     def execute_non_select_query(self, query, params=None):
         for db in self.databases:
             conn_str = self._parse_connection_string(db["ConnectionString"])
+            conn = None
             try:
                 conn = psycopg2.connect(**conn_str)
                 with conn.cursor() as cursor:
@@ -138,6 +141,7 @@ class LoadBalancer(Observer):
         self.logger.info(f"New database added: {database_config['Name']}")
 
         conn_str = self._parse_connection_string(database_config["ConnectionString"])
+        conn = None
         try:
             conn = psycopg2.connect(**conn_str)
             with conn.cursor() as cursor:
