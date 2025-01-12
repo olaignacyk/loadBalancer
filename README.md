@@ -1,7 +1,5 @@
 # Load Balancer System
 
-![Load Balancer](https://via.placeholder.com/728x90.png?text=Project+Logo)
-
 A Python-based Load Balancer designed to distribute requests across multiple servers efficiently. Built with scalability, modularity, and extensibility in mind, the project demonstrates key software design patterns in action.
 
 ---
