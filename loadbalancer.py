@@ -1,3 +1,5 @@
+import time
+
 import psycopg2
 import json
 from factory.strategy_factory import LoadBalancingStrategyFactory
@@ -112,6 +114,24 @@ class LoadBalancer(Observer):
             finally:
                 if conn:
                     conn.close()
+
+    def monitor_new_databases(self, interval=60):
+        """
+        Regularly check for new databases in the configuration file and add them if necessary.
+        """
+        while True:
+            try:
+                with open(self.config_file, 'r') as file:
+                    all_databases = json.load(file)
+
+                for db in all_databases:
+                    if db["Name"] not in [d["Name"] for d in self.databases]:
+                        self.add_database(db)
+                        self.logger.info(f"New database added: {db['Name']}")
+            except Exception as e:
+                self.logger.error(f"Error while monitoring new databases: {e}")
+
+            time.sleep(interval)
 
     def add_database(self, database_config):
         self.databases.append(database_config)

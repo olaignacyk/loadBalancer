@@ -19,18 +19,6 @@ def validate_email(email):
     return re.match(pattern, email) is not None
 
 
-def monitor_new_databases(load_balancer, config_file, interval=60):
-    while True:
-        with open(config_file, 'r') as file:
-            all_databases = json.load(file)
-
-        for db in all_databases:
-            if db["Name"] not in [d["Name"] for d in load_balancer.databases]:
-                load_balancer.add_database(db)
-
-        time.sleep(interval)
-
-
 def main():
     load_balancer = LoadBalancer('Connection/db.json', strategy_type="least_connections")
 
@@ -51,7 +39,7 @@ def main():
     health_checker.add_observer(load_balancer)
     health_checker.check_health()
 
-    monitor_thread = threading.Thread(target=monitor_new_databases, args=(load_balancer, 'Connection/db.json', 60), daemon=True)
+    monitor_thread = threading.Thread(target=load_balancer.monitor_new_databases, args=(60,), daemon=True)
     monitor_thread.start()
 
     try:
