@@ -175,12 +175,21 @@ class LoadBalancer(Observer):
                     all_databases = json.load(file)
 
                 for db in all_databases:
+                    # Sprawdź, czy baza nie została już dodana
                     if db["Name"] not in [d["Name"] for d in self.databases]:
-                        self.add_database(db)
+                        conn_str = self._parse_connection_string(db["ConnectionString"])
+
+                        # Sprawdź, czy baza jest aktywna
+                        if self._is_database_active(conn_str):
+                            self.databases.append(db)
+                            self.logger.info(f"New database added: {db['Name']}")
+                        else:
+                            self.logger.warning(f"Database {db['Name']} is inactive and will not be added.")
             except Exception as e:
                 self.logger.error(f"Error while monitoring new databases: {e}")
 
             time.sleep(interval)
+
 
     def add_database(self, database_config):
         """
