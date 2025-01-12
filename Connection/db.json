@@ -14,5 +14,29 @@
   {
     "Name": "db4",
     "ConnectionString": "Host=localhost;Port=5435;Database=database4;User=user4;Password=password4;"
+  },
+  {
+    "Name": "db5",
+    "ConnectionString": "Host=localhost;Port=5436;Database=database5;User=user5;Password=password5;"
+  },
+  {
+    "Name": "db6",
+    "ConnectionString": "Host=localhost;Port=5437;Database=database6;User=user6;Password=password6;"
+  },
+  {
+    "Name": "db7",
+    "ConnectionString": "Host=localhost;Port=5438;Database=database7;User=user7;Password=password7;"
+  },
+  {
+    "Name": "db8",
+    "ConnectionString": "Host=localhost;Port=5439;Database=database8;User=user8;Password=password8;"
+  },
+  {
+    "Name": "db9",
+    "ConnectionString": "Host=localhost;Port=5440;Database=database9;User=user9;Password=password9;"
+  },
+  {
+    "Name": "db10",
+    "ConnectionString": "Host=localhost;Port=5441;Database=database10;User=user10;Password=password10;"
   }
 ]

@@ -1,7 +1,8 @@
 version: "3.8"
 
-# 1
+
 services:
+  # 1
   postgres1:
     image: postgres
     container_name: postgres1
@@ -34,7 +35,7 @@ services:
       POSTGRES_USER: user3
       POSTGRES_PASSWORD: password3
 
-    # 4
+  # 4
   postgres4:
     image: postgres
     container_name: postgres4
@@ -44,3 +45,69 @@ services:
       POSTGRES_DB: database4
       POSTGRES_USER: user4
       POSTGRES_PASSWORD: password4
+
+#  # 5
+#  postgres5:
+#    image: postgres
+#    container_name: postgres5
+#    ports:
+#      - "5436:5432"
+#    environment:
+#      POSTGRES_DB: database5
+#      POSTGRES_USER: user5
+#      POSTGRES_PASSWORD: password5
+#
+#  # 6
+#  postgres6:
+#    image: postgres
+#    container_name: postgres6
+#    ports:
+#      - "5437:5432"
+#    environment:
+#      POSTGRES_DB: database6
+#      POSTGRES_USER: user6
+#      POSTGRES_PASSWORD: password6
+#
+#  # 7
+#  postgres7:
+#    image: postgres
+#    container_name: postgres7
+#    ports:
+#      - "5438:5432"
+#    environment:
+#      POSTGRES_DB: database7
+#      POSTGRES_USER: user7
+#      POSTGRES_PASSWORD: password7
+#
+#  # 8
+#  postgres8:
+#    image: postgres
+#    container_name: postgres8
+#    ports:
+#      - "5439:5432"
+#    environment:
+#      POSTGRES_DB: database8
+#      POSTGRES_USER: user8
+#      POSTGRES_PASSWORD: password8
+#
+#  # 9
+#  postgres9:
+#    image: postgres
+#    container_name: postgres9
+#    ports:
+#      - "5440:5432"
+#    environment:
+#      POSTGRES_DB: database9
+#      POSTGRES_USER: user9
+#      POSTGRES_PASSWORD: password9
+#
+#  # 10
+#  postgres10:
+#    image: postgres
+#    container_name: postgres10
+#    ports:
+#      - "5441:5432"
+#    environment:
+#      POSTGRES_DB: database10
+#      POSTGRES_USER: user10
+#      POSTGRES_PASSWORD: password10
