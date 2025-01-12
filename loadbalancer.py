@@ -1,24 +1,21 @@
+import time
+
 import psycopg2
 import json
 from factory.strategy_factory import LoadBalancingStrategyFactory
-from strategies.least_connections import LeastConnectionsStrategy
 from logger.singleton_logger import SingletonLogger
 from observer.base_observer import Observer
 
 
 class LoadBalancer(Observer):
     def __init__(self, config_file, strategy_type="round_robin"):
-        """
-        Initialize the LoadBalancer with a configuration file and strategy type.
-        :param config_file: Path to the JSON configuration file.
-        :param strategy_type: The load balancing strategy type.
-        """
         self.logger = SingletonLogger().get_logger()
         self.logger.info(f"Initializing LoadBalancer with strategy: {strategy_type}")
         self.config_file = config_file
         self.databases = self.load_config()
         self.strategy = self.set_strategy(strategy_type)
 
+        
     def load_config(self):
         """
         Load the database configuration from a JSON file.
@@ -48,10 +45,6 @@ class LoadBalancer(Observer):
             raise
 
     def get_connection(self):
-        """
-        Get a connection to a selected database based on the strategy.
-        :return: psycopg2 connection object.
-        """
         if not self.databases:
             self.logger.error("No databases available in configuration.")
             raise RuntimeError("No databases available in configuration.")
@@ -61,20 +54,17 @@ class LoadBalancer(Observer):
 
         conn_str = self._parse_connection_string(db_info["ConnectionString"])
         try:
-            connection = psycopg2.connect(**conn_str)
             self.logger.info(f"Connected to database: {db_info['Name']}")
+            connection = psycopg2.connect(**conn_str)
             return connection, db_info['Name']
         except psycopg2.OperationalError as e:
             self.logger.error(f"Failed to connect to {db_info['Name']}: {e}")
             return None, None
 
     def create_table(self, schema):
-        """
-        Create a table in all databases.
-        :param schema: The SQL schema to execute.
-        """
         for db in self.databases:
             conn_str = self._parse_connection_string(db["ConnectionString"])
+            conn = None
             try:
                 conn = psycopg2.connect(**conn_str)
                 with conn.cursor() as cursor:
@@ -87,131 +77,105 @@ class LoadBalancer(Observer):
                 if conn:
                     conn.close()
 
+    def reset_sequences(self):
+        query = "SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE(MAX(id), 0), true) FROM users;"
+        for db in self.databases:
+            conn_str = self._parse_connection_string(db["ConnectionString"])
+            conn = None
+            try:
+                conn = psycopg2.connect(**conn_str)
+                with conn.cursor() as cursor:
+                    cursor.execute(query)
+                    conn.commit()
+            except Exception as e:
+                self.logger.error(f"Error resetting sequence in database {db['Name']}: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
     def execute_select(self, query, params=None):
-        """
-        Execute a SELECT query on a database chosen by the strategy.
-        :param query: The SELECT query to execute.
-        :param params: Optional query parameters.
-        :return: Query results.
-        """
+        # if "ORDER BY" not in query.upper():
+        #     query = query.rstrip(";") + " ORDER BY id;"
+
         conn, db_name = self.get_connection()
         if conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(query, params)
                     result = cursor.fetchall()
-                    self.logger.info(f"SELECT executed on database {db_name}: {result}")
                     return result
             except Exception as e:
                 self.logger.error(f"Error executing SELECT on {db_name}: {e}")
             finally:
                 conn.close()
 
-    def synchronize_tables(self, master_file):
-        """
-        Synchronize all databases with data from the master file.
-        :param master_file: Path to the master JSON file containing the table data.
-        """
-        with open(master_file, 'r') as file:
-            master_data = json.load(file)
-
+    def execute_non_select_query(self, query, params=None):
         for db in self.databases:
             conn_str = self._parse_connection_string(db["ConnectionString"])
+            conn = None
             try:
                 conn = psycopg2.connect(**conn_str)
                 with conn.cursor() as cursor:
-                    # Clear existing data
-                    cursor.execute("DELETE FROM users;")
-
-                    # Insert master data
-                    for record in master_data:
-                        cursor.execute(
-                            "INSERT INTO users (id, name, email) VALUES (%s, %s, %s) "
-                            "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email;",
-                            (record["id"], record["name"], record["email"])
-                        )
+                    cursor.execute(query, params)
                     conn.commit()
-                    self.logger.info(f"Database {db['Name']} synchronized with master data.")
+                    self.logger.info(f"Query executed on database {db['Name']}: {query}")
             except Exception as e:
-                self.logger.error(f"Error synchronizing database {db['Name']}: {e}")
+                self.logger.error(f"Error executing query on database {db['Name']}: {e}")
             finally:
                 if conn:
                     conn.close()
 
-    def add_user(self, master_file, name, email):
+    def monitor_new_databases(self, interval=60):
         """
-        Add a new user to the master data and synchronize with all databases.
-        :param master_file: Path to the master JSON file.
-        :param name: Name of the user.
-        :param email: Email of the user.
+        Regularly check for new databases in the configuration file and add them if necessary.
         """
-        with open(master_file, 'r+') as file:
-            data = json.load(file)
-            new_id = max([user["id"] for user in data]) + 1 if data else 1
-            new_user = {"id": new_id, "name": name, "email": email}
-            data.append(new_user)
+        while True:
+            try:
+                with open(self.config_file, 'r') as file:
+                    all_databases = json.load(file)
 
-            # Write back to the file
-            file.seek(0)
-            json.dump(data, file, indent=4)
-            file.truncate()
+                for db in all_databases:
+                    if db["Name"] not in [d["Name"] for d in self.databases]:
+                        self.add_database(db)
+                        self.logger.info(f"New database added: {db['Name']}")
+            except Exception as e:
+                self.logger.error(f"Error while monitoring new databases: {e}")
 
-        self.logger.info(f"Added new user to master data: {new_user}")
-        self.synchronize_tables(master_file)
+            time.sleep(interval)
 
-    def update_user(self, master_file, user_id, name=None, email=None):
-        """
-        Update a user's details in the master data and synchronize with all databases.
-        :param master_file: Path to the master JSON file.
-        :param user_id: ID of the user to update.
-        :param name: New name for the user.
-        :param email: New email for the user.
-        """
-        with open(master_file, 'r+') as file:
-            data = json.load(file)
-            for user in data:
-                if user["id"] == user_id:
-                    if name:
-                        user["name"] = name
-                    if email:
-                        user["email"] = email
-                    break
-            else:
-                self.logger.error(f"User with ID {user_id} not found.")
-                return
+    def add_database(self, database_config):
+        self.databases.append(database_config)
+        self.logger.info(f"New database added: {database_config['Name']}")
 
-            # Write back to the file
-            file.seek(0)
-            json.dump(data, file, indent=4)
-            file.truncate()
+        conn_str = self._parse_connection_string(database_config["ConnectionString"])
+        conn = None
+        try:
+            conn = psycopg2.connect(**conn_str)
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    email VARCHAR(255) UNIQUE NOT NULL
+                );
+                """)
+                conn.commit()
+                self.logger.info(f"Table created in new database {database_config['Name']}")
+        except Exception as e:
+            self.logger.error(f"Error adding new database {database_config['Name']}: {e}")
+        finally:
+            if conn:
+                conn.close()
 
-        self.logger.info(f"Updated user in master data: {user_id}")
-        self.synchronize_tables(master_file)
-
-    def delete_user(self, master_file, user_id):
-        """
-        Delete a user from the master data and synchronize with all databases.
-        :param master_file: Path to the master JSON file.
-        :param user_id: ID of the user to delete.
-        """
-        with open(master_file, 'r+') as file:
-            data = json.load(file)
-            data = [user for user in data if user["id"] != user_id]
-
-            # Write back to the file
-            file.seek(0)
-            json.dump(data, file, indent=4)
-            file.truncate()
-
-        self.logger.info(f"Deleted user from master data: {user_id}")
-        self.synchronize_tables(master_file)
+    def set_strategy(self, strategy_type):
+        try:
+            self.strategy = LoadBalancingStrategyFactory.create_strategy(strategy_type)
+            self.logger.info(f"Strategy changed to: {strategy_type}")
+        except ValueError as e:
+            self.logger.error(f"Failed to change strategy: {e}")
+            raise
 
     def _parse_connection_string(self, conn_string):
-        """
-        Parse a connection string into a dictionary suitable for psycopg2.
-        :param conn_string: The connection string.
-        :return: Dictionary of connection parameters.
-        """
         params = {}
         for pair in conn_string.split(';'):
             if pair.strip():
@@ -224,11 +188,6 @@ class LoadBalancer(Observer):
         return params
 
     def update(self, database_name, status):
-        """
-        Observer method to update the status of a database.
-        :param database_name: Name of the database.
-        :param status: The health status of the database ('healthy' or 'unhealthy').
-        """
         if status == "unhealthy":
             self.logger.warning(f"Database {database_name} marked as unhealthy. Excluding from load balancing.")
             self.databases = [db for db in self.databases if db["Name"] != database_name]
