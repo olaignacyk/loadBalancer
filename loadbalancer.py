@@ -1,4 +1,3 @@
-import time
 import psycopg2
 import json
 from factory.strategy_factory import LoadBalancingStrategyFactory
@@ -13,7 +12,7 @@ class LoadBalancer(Observer):
         self.config_file = config_file
         self.databases = self.load_config()
         self.active_databases = self.databases.copy()
-        self.strategy = self.set_strategy(strategy_type)
+        self.strategy = LoadBalancingStrategyFactory.create_strategy(strategy_type)
 
     def load_config(self):
         """
@@ -32,15 +31,11 @@ class LoadBalancer(Observer):
             raise
 
     def set_strategy(self, strategy_type):
-        """
-        Set the load balancing strategy based on the strategy type.
-        """
         try:
-            strategy = LoadBalancingStrategyFactory.create_strategy(strategy_type)
-            self.logger.info(f"Strategy '{strategy_type}' successfully initialized.")
-            return strategy
-        except KeyError as e:
-            self.logger.error(f"Unknown strategy type: {strategy_type} - {e}")
+            self.strategy = LoadBalancingStrategyFactory.create_strategy(strategy_type)
+            self.logger.info(f"Strategy changed to: {strategy_type}")
+        except ValueError as e:
+            self.logger.error(f"Failed to change strategy: {e}")
             raise
 
     def get_connection(self):
@@ -62,7 +57,10 @@ class LoadBalancer(Observer):
             return None, None
 
     def create_table(self, schema):
-        for db in self.databases:
+        """
+        Create a table in all active databases.
+        """
+        for db in self.active_databases:
             conn_str = self._parse_connection_string(db["ConnectionString"])
             conn = None
             try:
@@ -71,6 +69,8 @@ class LoadBalancer(Observer):
                     cursor.execute(schema)
                     conn.commit()
                     self.logger.info(f"Table created in database {db['Name']}")
+            except psycopg2.OperationalError:
+                self.logger.warning(f"Could not connect to database {db['Name']}. Skipping table creation.")
             except Exception as e:
                 self.logger.error(f"Error creating table in database {db['Name']}: {e}")
             finally:
@@ -88,7 +88,8 @@ class LoadBalancer(Observer):
                     cursor.execute(query)
                     conn.commit()
             except Exception as e:
-                self.logger.error(f"Error resetting sequence in database {db['Name']}: {e}")
+                # self.logger.error(f"Error resetting sequence in database {db['Name']}: {e}")
+                pass
             finally:
                 if conn:
                     conn.close()
@@ -100,7 +101,6 @@ class LoadBalancer(Observer):
                 with conn.cursor() as cursor:
                     cursor.execute(query, params)
                     result = cursor.fetchall()
-                    self.synchronize_inactive_databases(query, params)
                     return result
             except Exception as e:
                 self.logger.error(f"Error executing SELECT on {db_name}: {e}")
@@ -123,67 +123,80 @@ class LoadBalancer(Observer):
                 if conn:
                     conn.close()
 
-        self.synchronize_inactive_databases(query, params)
-
-    def synchronize_inactive_databases(self, query, params):
-        for db in self.databases:
-            if db not in self.active_databases:
-                conn_str = self._parse_connection_string(db["ConnectionString"])
-                conn = None
-                try:
-                    conn = psycopg2.connect(**conn_str)
-                    with conn.cursor() as cursor:
-                        cursor.execute(query, params)
-                        conn.commit()
-                        self.logger.info(f"Synchronized query to inactive database {db['Name']}: {query}")
-                except Exception as e:
-                    self.logger.error(f"Error synchronizing database {db['Name']}: {e}")
-                finally:
-                    if conn:
-                        conn.close()
-
-    def monitor_new_databases(self, interval=60):
+    def synchronize_tables(self):
         """
-        Regularly check for new databases in the configuration file and add them if necessary.
+        Synchronize data in the 'users' table across all active databases.
+        The database with the most consistent data across all databases is used as the source.
         """
-        while True:
+        if not self.active_databases:
+            self.logger.warning("No active databases to synchronize.")
+            return
+
+        # Step 1: Fetch data from all active databases
+        database_data = {}
+        for db in self.active_databases:
+            conn_str = self._parse_connection_string(db["ConnectionString"])
+            conn = None
             try:
-                with open(self.config_file, 'r') as file:
-                    all_databases = json.load(file)
+                conn = psycopg2.connect(**conn_str)
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT id, name, email FROM users ORDER BY id;")
+                    data = cursor.fetchall()
+                    database_data[db["Name"]] = data
+                # self.logger.info(f"Fetched {len(data)} rows from database '{db['Name']}'.")
+            except psycopg2.Error as e:
+                # self.logger.error(f"Error fetching data from database '{db['Name']}': {e}")
+                pass
+            finally:
+                if conn:
+                    conn.close()
 
-                for db in all_databases:
-                    if db["Name"] not in [d["Name"] for d in self.databases]:
-                        self.add_database(db)
-                        self.logger.info(f"New database added: {db['Name']}")
-            except Exception as e:
-                self.logger.error(f"Error while monitoring new databases: {e}")
+        if not database_data:
+            self.logger.warning("No valid data fetched from active databases.")
+            return
 
-            time.sleep(interval)
+        # Step 2: Determine the most consistent database (by comparing data sets)
+        reference_db_name = None
+        max_matches = 0
+        for db_name, data in database_data.items():
+            matches = sum(
+                1 for other_db, other_data in database_data.items() if db_name != other_db and data == other_data
+            )
+            if matches > max_matches:
+                max_matches = matches
+                reference_db_name = db_name
 
-    def add_database(self, database_config):
-        self.databases.append(database_config)
-        self.active_databases.append(database_config)
-        self.logger.info(f"New database added: {database_config['Name']}")
+        if not reference_db_name:
+            self.logger.error("Failed to determine the most consistent database for synchronization.")
+            return
 
-        conn_str = self._parse_connection_string(database_config["ConnectionString"])
-        conn = None
-        try:
-            conn = psycopg2.connect(**conn_str)
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    email VARCHAR(255) UNIQUE NOT NULL
-                );
-                """)
-                conn.commit()
-                self.logger.info(f"Table created in new database {database_config['Name']}")
-        except Exception as e:
-            self.logger.error(f"Error adding new database {database_config['Name']}: {e}")
-        finally:
-            if conn:
-                conn.close()
+        reference_data = database_data[reference_db_name]
+        self.logger.info(f"Database '{reference_db_name}' selected as the source for synchronization.")
+
+        # Step 3: Update all other active databases
+        for db in self.active_databases:
+            if db["Name"] == reference_db_name:
+                continue  # Skip the source database
+            conn_str = self._parse_connection_string(db["ConnectionString"])
+            conn = None
+            try:
+                conn = psycopg2.connect(**conn_str)
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM users;")  # Clear existing data
+                    for row in reference_data:
+                        cursor.execute(
+                            "INSERT INTO users (id, name, email) VALUES (%s, %s, %s) "
+                            "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email;",
+                            row,
+                        )
+                    conn.commit()
+                self.logger.info(f"Synchronized database '{db['Name']}' with data from '{reference_db_name}'.")
+            except psycopg2.Error as e:
+                # self.logger.error(f"Error synchronizing database '{db['Name']}': {e}")
+                pass
+            finally:
+                if conn:
+                    conn.close()
 
     def _parse_connection_string(self, conn_string):
         params = {}

@@ -1,6 +1,5 @@
 version: "3.8"
 
-
 services:
   # 1
   postgres1:
@@ -89,7 +88,7 @@ services:
       POSTGRES_DB: database8
       POSTGRES_USER: user8
       POSTGRES_PASSWORD: password8
-#
+
   # 9
   postgres9:
     image: postgres

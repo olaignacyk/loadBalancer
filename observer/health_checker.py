@@ -79,7 +79,7 @@ class HealthChecker:
                     self.notify_observers(db_name, "healthy")
             except psycopg2.OperationalError:
                 if self.database_status[db_name] != "unhealthy":
-                    self.logger.error(f"Database {db_name} status changed to unhealthy.")
+                    # self.logger.error(f"Database {db_name} status changed to unhealthy.")
                     self.database_status[db_name] = "unhealthy"
                     self.notify_observers(db_name, "unhealthy")
 

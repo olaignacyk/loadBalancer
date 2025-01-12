@@ -1,6 +1,4 @@
 import re
-import threading
-import time
 from loadbalancer import LoadBalancer
 from observer.health_checker import HealthChecker
 import json
@@ -31,6 +29,7 @@ def main():
     """
     load_balancer.create_table(schema)
     load_balancer.reset_sequences()
+    load_balancer.synchronize_tables()
 
     with open('Connection/db.json', 'r') as file:
         databases = json.load(file)
@@ -38,9 +37,6 @@ def main():
 
     health_checker.add_observer(load_balancer)
     health_checker.check_health()
-
-    monitor_thread = threading.Thread(target=load_balancer.monitor_new_databases, args=(60,), daemon=True)
-    monitor_thread.start()
 
     try:
         while True:
@@ -67,7 +63,7 @@ def main():
                     print("Nie znaleziono użytkownika o podanym ID.")
 
             elif choice == "2":
-                query = "SELECT * FROM users;"
+                query = "SELECT * FROM users ORDER BY id;"
                 results = load_balancer.execute_select(query)
                 for row in results:
                     print(f"ID: {row[0]}, Name: {row[1]}, Email: {row[2]}")
