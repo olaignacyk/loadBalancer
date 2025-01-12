@@ -8,9 +8,6 @@ import random
 
 
 def validate_name(name):
-    """
-    Validate that the name contains both first and last name, each starting with a capital letter.
-    """
     if not name.strip():
         return False
     parts = name.split()
@@ -18,33 +15,13 @@ def validate_name(name):
 
 
 def validate_email(email):
-    """
-    Validate that the email has a proper format.
-    """
     pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
     return re.match(pattern, email) is not None
 
 
-def monitor_new_databases(load_balancer, config_file, interval=60):
-    """
-    Regularly check for new databases in the configuration file and add them if necessary.
-    """
-    while True:
-        with open(config_file, 'r') as file:
-            all_databases = json.load(file)
-
-        for db in all_databases:
-            if db["Name"] not in [d["Name"] for d in load_balancer.databases]:
-                load_balancer.add_database(db)
-
-        time.sleep(interval)
-
-
 def main():
-    # Inicjalizacja Load Balancera
     load_balancer = LoadBalancer('Connection/db.json', strategy_type="least_connections")
 
-    # Tworzenie tabeli w każdej bazie danych
     schema = """
     CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -55,19 +32,14 @@ def main():
     load_balancer.create_table(schema)
     load_balancer.reset_sequences()
 
-    # Inicjalizacja Health Checkera
     with open('Connection/db.json', 'r') as file:
         databases = json.load(file)
     health_checker = HealthChecker(databases, check_interval=15)
 
-    # Rejestracja Load Balancera jako obserwatora
     health_checker.add_observer(load_balancer)
-
-    # Uruchomienie Health Checkera w tle
     health_checker.check_health()
 
-    # Uruchomienie monitora nowych baz danych w oddzielnym wątku
-    monitor_thread = threading.Thread(target=monitor_new_databases, args=(load_balancer, 'Connection/db.json', 60), daemon=True)
+    monitor_thread = threading.Thread(target=load_balancer.monitor_new_databases, args=(60,), daemon=True)
     monitor_thread.start()
 
     try:
@@ -83,7 +55,8 @@ def main():
             print("8. Wyjście")
 
             choice = input("Wybierz operację: ")
-            if choice == "1":  # SELECT po ID
+
+            if choice == "1":
                 user_id = input("Podaj ID użytkownika: ")
                 query = "SELECT * FROM users WHERE id = %s;"
                 results = load_balancer.execute_select(query, (user_id,))
@@ -93,55 +66,94 @@ def main():
                 else:
                     print("Nie znaleziono użytkownika o podanym ID.")
 
-            elif choice == "2":  # SELECT ALL
+            elif choice == "2":
                 query = "SELECT * FROM users;"
                 results = load_balancer.execute_select(query)
-                print("\n--- Lista Użytkowników ---")
                 for row in results:
                     print(f"ID: {row[0]}, Name: {row[1]}, Email: {row[2]}")
 
-            elif choice == "3":  # INSERT
+            elif choice == "3":
                 while True:
-                    name = input("Podaj imię i nazwisko (np. Jan Kowalski): ")
+                    name = input("Podaj imię i nazwisko: ")
                     if validate_name(name):
                         break
-                    print("Nieprawidłowe imię i nazwisko. Musisz podać imię i nazwisko, zaczynające się wielkimi literami.")
+                    print("Nieprawidłowe imię i nazwisko.")
 
                 while True:
                     email = input("Podaj email: ")
                     if validate_email(email):
                         break
-                    print("Nieprawidłowy format email. Spróbuj ponownie (np. example@example.com).")
+                    print("Nieprawidłowy format email.")
 
-                load_balancer.add_user(name, email)
+                query = "INSERT INTO users (name, email) VALUES (%s, %s);"
+                load_balancer.execute_non_select_query(query, (name, email))
                 print("Dodano nowego użytkownika.")
 
-            elif choice == "4":  # INSERT RANDOM
+            elif choice == "4":
                 chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
                 random_name = " ".join(["".join(random.choices(chars, k=5)).capitalize() for _ in range(2)])
                 random_email = f"{random_name.split()[0].lower()}@example.com"
-                load_balancer.add_user(random_name, random_email)
+                query = "INSERT INTO users (name, email) VALUES (%s, %s);"
+                load_balancer.execute_non_select_query(query, (random_name, random_email))
                 print(f"Dodano losowego użytkownika: {random_name}, {random_email}")
 
-            elif choice == "5":  # DELETE
+            elif choice == "5":
                 user_id = input("Podaj ID użytkownika do usunięcia: ")
-                load_balancer.delete_user(int(user_id))
+                query_check = "SELECT 1 FROM users WHERE id = %s LIMIT 1;"
+                results = load_balancer.execute_select(query_check, (user_id,))
+                if not results:
+                    print(f"Użytkownik o ID {user_id} nie istnieje.")
+                    continue
+
+                query = "DELETE FROM users WHERE id = %s;"
+                load_balancer.execute_non_select_query(query, (user_id,))
+                print(f"Użytkownik o ID {user_id} został usunięty.")
 
             elif choice == "6":  # UPDATE
                 user_id = input("Podaj ID użytkownika do zaktualizowania: ")
-                new_name = input("Podaj nowe imię i nazwisko (lub naciśnij Enter, aby pominąć): ")
-                if new_name and not validate_name(new_name):
-                    print("Nieprawidłowe imię i nazwisko. Zmiana została pominięta.")
-                    new_name = None
+                query_check = "SELECT 1 FROM users WHERE id = %s LIMIT 1;"
+                results = load_balancer.execute_select(query_check, (user_id,))
 
-                new_email = input("Podaj nowy email (lub naciśnij Enter, aby pominąć): ")
-                if new_email and not validate_email(new_email):
-                    print("Nieprawidłowy format email. Zmiana została pominięta.")
-                    new_email = None
+                if not results:
+                    print(f"Użytkownik o ID {user_id} nie istnieje.")
+                    continue
 
-                load_balancer.update_user(int(user_id), name=new_name or None, email=new_email or None)
+                new_name = None
+                while True:
+                    new_name = input("Podaj nowe imię i nazwisko (lub naciśnij Enter, aby pominąć): ")
+                    if not new_name:  # Puste wejście oznacza pominięcie
+                        break
+                    if validate_name(new_name):
+                        break
+                    print("Nieprawidłowe imię i nazwisko.")
 
-            elif choice == "7":  # Zmień algorytm load balancing
+                new_email = None
+                while True:
+                    new_email = input("Podaj nowy email (lub naciśnij Enter, aby pominąć): ")
+                    if not new_email:  # Puste wejście oznacza pominięcie
+                        break
+                    if validate_email(new_email):
+                        break
+                    print("Nieprawidłowy format email. Spróbuj ponownie (np. example@example.com).")
+                if not new_name and not new_email:
+                    print("Brak danych do zaktualizowania. Operacja została anulowana.")
+                    continue
+
+                query = "UPDATE users SET "
+                params = []
+                if new_name:
+                    query += "name = %s, "
+                    params.append(new_name)
+                if new_email:
+                    query += "email = %s, "
+                    params.append(new_email)
+
+                query = query.rstrip(", ") + " WHERE id = %s;"
+                params.append(user_id)
+                load_balancer.execute_non_select_query(query, params)
+                print(f"Użytkownik o ID {user_id} został zaktualizowany.")
+
+            elif choice == "7":
                 print("Wybierz algorytm: 1 - RoundRobin, 2 - Random, 3 - LeastConnections")
                 algorithm_choice = input("Wybór: ")
                 if algorithm_choice == "1":
@@ -156,7 +168,7 @@ def main():
                 else:
                     print("Nieprawidłowy wybór algorytmu.")
 
-            elif choice == "8":  # Wyjście
+            elif choice == "8":
                 print("Zamykanie programu...")
                 break
 
