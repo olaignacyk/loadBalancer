@@ -220,3 +220,4 @@ class LoadBalancer(Observer):
                 db_to_add = next((db for db in self.databases if db["Name"] == database_name), None)
                 if db_to_add:
                     self.active_databases.append(db_to_add)
+                    self.synchronize_tables()
