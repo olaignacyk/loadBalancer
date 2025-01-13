@@ -69,8 +69,8 @@ A Python-based Load Balancer designed to distribute requests across multiple ser
 Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/load-balancer.git
-cd load-balancer
+git clone https://github.com/olaignacyk/loadBalancer.git
+cd loadBalancer
 ```
 
 Install dependencies:
@@ -84,18 +84,16 @@ pip install -r requirements.txt
 Start the services using Docker:
 
 ```bash
+cd docker
 docker-compose up
 ```
 
 Access the load balancer and interact via the command line or integrated tools.
 
-### Run Tests
-
-Execute unit tests to verify functionality:
-
 ```bash
-python -m unittest discover tests
+python main.py
 ```
+
 
 ---
 
