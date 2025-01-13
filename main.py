@@ -18,7 +18,7 @@ def validate_email(email):
 
 
 def main():
-    load_balancer = LoadBalancer('Connection/db.json', strategy_type="least_connections")
+    load_balancer = LoadBalancer('Connection/db.json', 'users', strategy_type="least_connections")
 
     schema = """
     CREATE TABLE IF NOT EXISTS users (
@@ -37,7 +37,7 @@ def main():
     health_checker.add_observer(load_balancer)
     health_checker.check_health()
 
-    load_balancer.synchronize_tables()
+    load_balancer.synchronize_tables(load_balancer.table_name)
 
     try:
         while True:
