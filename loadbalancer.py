@@ -6,7 +6,8 @@ from observer.base_observer import Observer
 
 
 class LoadBalancer(Observer):
-    def __init__(self, config_file, strategy_type="round_robin"):
+    def __init__(self, config_file, table_name, strategy_type="round_robin"):
+        self.table_name = table_name
         self.logger = SingletonLogger().get_logger()
         self.logger.info(f"Initializing LoadBalancer with strategy: {strategy_type}")
         self.config_file = config_file
@@ -123,36 +124,50 @@ class LoadBalancer(Observer):
                 if conn:
                     conn.close()
 
-    def synchronize_tables(self):
+    def synchronize_tables(self, table_name):
         """
-        Synchronize data in the 'users' table across all active databases.
+        Synchronize data in a specified table across all active databases.
         The database with the most consistent data across all databases is used as the source.
+        :param table_name: Name of the table to synchronize.
         """
         if not self.active_databases:
             self.logger.warning("No active databases to synchronize.")
             return
 
-        # Step 1: Fetch data from all active databases
+        # Step 1: Fetch column information and data from all active databases
         database_data = {}
+        table_columns = None
         for db in self.active_databases:
             conn_str = self._parse_connection_string(db["ConnectionString"])
             conn = None
             try:
                 conn = psycopg2.connect(**conn_str)
                 with conn.cursor() as cursor:
-                    cursor.execute("SELECT id, name, email FROM users ORDER BY id;")
+                    # Fetch column information
+                    if table_columns is None:
+                        cursor.execute(f"""
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name = %s
+                        ORDER BY ordinal_position;
+                        """, (table_name,))
+                        columns = cursor.fetchall()
+                        if not columns:
+                            self.logger.warning(f"Table '{table_name}' does not exist in database '{db['Name']}'.")
+                            return
+                        table_columns = [col[0] for col in columns]
+
+                    cursor.execute(f"SELECT * FROM {table_name} ORDER BY {table_columns[0]};")
                     data = cursor.fetchall()
                     database_data[db["Name"]] = data
-                # self.logger.info(f"Fetched {len(data)} rows from database '{db['Name']}'.")
             except psycopg2.Error as e:
-                # self.logger.error(f"Error fetching data from database '{db['Name']}': {e}")
-                pass
+                self.logger.warning(f"Error fetching data from database '{db['Name']}': {e}")
             finally:
                 if conn:
                     conn.close()
 
         if not database_data:
-            self.logger.warning("No valid data fetched from active databases.")
+            self.logger.warning(f"No valid data fetched for table '{table_name}' from active databases.")
             return
 
         # Step 2: Determine the most consistent database (by comparing data sets)
@@ -167,11 +182,13 @@ class LoadBalancer(Observer):
                 reference_db_name = db_name
 
         if not reference_db_name:
-            self.logger.error("Failed to determine the most consistent database for synchronization.")
+            self.logger.error(
+                f"Failed to determine the most consistent database for synchronization of '{table_name}'.")
             return
 
         reference_data = database_data[reference_db_name]
-        self.logger.info(f"Database '{reference_db_name}' selected as the source for synchronization.")
+        self.logger.info(
+            f"Database '{reference_db_name}' selected as the source for synchronizing table '{table_name}'.")
 
         # Step 3: Update all other active databases
         for db in self.active_databases:
@@ -182,18 +199,21 @@ class LoadBalancer(Observer):
             try:
                 conn = psycopg2.connect(**conn_str)
                 with conn.cursor() as cursor:
-                    cursor.execute("DELETE FROM users;")  # Clear existing data
+                    cursor.execute(f"DELETE FROM {table_name};")
+
+                    insert_query = f"""
+                    INSERT INTO {table_name} ({', '.join(table_columns)}) 
+                    VALUES ({', '.join(['%s'] * len(table_columns))})
+                    ON CONFLICT ({table_columns[0]}) 
+                    DO UPDATE SET {', '.join([f"{col} = EXCLUDED.{col}" for col in table_columns[1:]])};
+                    """
                     for row in reference_data:
-                        cursor.execute(
-                            "INSERT INTO users (id, name, email) VALUES (%s, %s, %s) "
-                            "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email;",
-                            row,
-                        )
+                        cursor.execute(insert_query, row)
                     conn.commit()
-                self.logger.info(f"Synchronized database '{db['Name']}' with data from '{reference_db_name}'.")
+                self.logger.info(
+                    f"Synchronized database '{db['Name']}' with data from '{reference_db_name}' for table '{table_name}'.")
             except psycopg2.Error as e:
-                # self.logger.error(f"Error synchronizing database '{db['Name']}': {e}")
-                pass
+                self.logger.warning(f"Error synchronizing database '{db['Name']}' for table '{table_name}': {e}")
             finally:
                 if conn:
                     conn.close()
@@ -220,4 +240,4 @@ class LoadBalancer(Observer):
                 db_to_add = next((db for db in self.databases if db["Name"] == database_name), None)
                 if db_to_add:
                     self.active_databases.append(db_to_add)
-                    self.synchronize_tables()
+                    self.synchronize_tables(self.table_name)
