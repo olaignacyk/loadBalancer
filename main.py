@@ -28,7 +28,6 @@ def main():
     );
     """
     load_balancer.create_table(schema)
-    load_balancer.reset_sequences()
 
     with open('Connection/db.json', 'r') as file:
         databases = json.load(file)
@@ -38,6 +37,7 @@ def main():
     health_checker.check_health()
 
     load_balancer.synchronize_tables(load_balancer.table_name)
+    load_balancer.reset_sequences()
 
     try:
         while True:
