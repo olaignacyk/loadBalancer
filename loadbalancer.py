@@ -118,6 +118,7 @@ class LoadBalancer(Observer):
                     cursor.execute(query, params)
                     conn.commit()
                     self.logger.info(f"Query executed on active database {db['Name']}")
+                    self.reset_sequences()
             except Exception as e:
                 self.logger.error(f"Error executing query on database {db['Name']}: {e}")
             finally:
